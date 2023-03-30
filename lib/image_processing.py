@@ -3,15 +3,15 @@ import cv2 as cv
 import numpy as np
 from concurrent import futures
 from typing import TypeAlias, Final
-from tools import execution_time
+from lib import tools
 
 NDArray2D: TypeAlias = np.ndarray[np.ndarray[int]]
 NDArray3D: TypeAlias = np.ndarray[np.ndarray[np.ndarray[int]]]
 
-SLISE_SIZE: Final = 500
+SLISE_SIZE: Final = 1000
 
 
-@execution_time.PrintExecutionTime
+@tools.PrintExecutionTime
 def scale_images_multiprocess(images: list[NDArray3D],
                               scale_by: int,
                               processes: int) -> list[NDArray3D]:
@@ -29,7 +29,7 @@ def save_pictures(pictures: list[NDArray3D], folder: str):
         cv.imwrite(img_path, img)
 
 
-@execution_time.PrintExecutionTime
+@tools.PrintExecutionTime
 def convolve_img(img: NDArray3D,
                  kernel: NDArray2D,
                  processes: int = 1) -> NDArray3D:
@@ -82,7 +82,6 @@ def _convolve_channel(channel: NDArray2D,
 def _multiply_matrix_by_kernel(matrix: NDArray2D,
                                kernel: NDArray2D,
                                processes: int) -> NDArray2D:
-    print(matrix)
     kernel_x = len(kernel)
     kernel_y = len(kernel[0])
     matrix_x = len(matrix)
@@ -96,6 +95,7 @@ def _multiply_matrix_by_kernel(matrix: NDArray2D,
     packs_of_results = _multiply_packs_of_areas_by_kernel(
         packs=packs_of_areas, kernel=kernel, processes=processes,
     )
+    # print(tools.is_ok_2d(packs_of_results))
     processed_matrix = _get_matrix_from_packs_of_results(
         packs=packs_of_results, x=new_matrix_x, y=new_matrix_y,
     )
@@ -118,12 +118,12 @@ def _get_packs_of_areas(matrix: NDArray2D,
 
 
 def _get_areas_from_matrix(matrix: NDArray2D,
-                           x_size: int,
-                           y_size: int) -> list[NDArray2D]:
+                           area_x: int,
+                           area_y: int) -> list[NDArray2D]:
     areas = []
-    for i, _ in enumerate(matrix):
-        for j, _ in enumerate(matrix[0]):
-            areas.append(np.array(matrix[i:i + x_size, j:j + y_size]))
+    for i in range(len(matrix) - area_x + 1):
+        for j in range(len(matrix) - area_y + 1):
+            areas.append(np.array(matrix[i:i + area_x, j:j + area_y]))
 
     return areas
 
@@ -131,36 +131,37 @@ def _get_areas_from_matrix(matrix: NDArray2D,
 def _multiply_packs_of_areas_by_kernel(packs: list[list[NDArray2D]],
                                        kernel: NDArray2D,
                                        processes: int = 1) -> list[list[int]]:
-    print(f"{packs=}")
     with futures.ProcessPoolExecutor(max_workers=processes) as executor:
         packs_of_results = executor.map(
             _multiply_pack_of_areas_by_kernel,
             packs, itertools.repeat(kernel),
         )
 
-    return list(packs_of_results)
+    lst_packs_of_results = list(packs_of_results)
+    return lst_packs_of_results
 
 
 def _get_matrix_from_packs_of_results(packs: list[list[int]],
                                       x: int,
                                       y: int) -> NDArray2D:
-    matrix = np.empty(shape=(x * y))
-    _fill_matrix_with_results(matrix, packs=packs)
-    matrix = matrix.reshape(shape=(x, y), order='C')
+    ndarray = np.empty(shape=(x * y), dtype='int32')
+
+    _fill_ndarray_with_packed_results(ndarray, packs=packs)
+    matrix = ndarray.reshape((x, y))
 
     return matrix
 
 
-def _fill_matrix_with_results(matrix: np.ndarray[int],
-                              packs: list[list[int]]) -> None:
-    for i, row in enumerate(packs):
-        for j, result in enumerate(row):
-            matrix[i * j] = result
+def _fill_ndarray_with_packed_results(ndarray: np.ndarray[int],
+                                      packs: list[list[int]]) -> None:
+    results_iter = itertools.chain(*packs)
+
+    for i, _ in enumerate(ndarray):
+        ndarray[i] = next(results_iter)
 
 
 def _multiply_pack_of_areas_by_kernel(pack: list[NDArray2D],
                                       kernel: NDArray2D) -> list[int]:
-    print(pack)
     pack_of_results = [
         _multiply_area_by_kernel(area=area, kernel=kernel)
         for area in pack
@@ -182,7 +183,6 @@ def _negatives_to_zeros(matrix: NDArray2D):
 
 def _multiply_area_by_kernel(area: NDArray2D,
                              kernel: NDArray2D) -> int:
-    print('area:', area)
     x_size = len(area)
     y_size = len(area[0])
     new = np.empty((x_size, y_size), dtype='int16')
@@ -198,15 +198,16 @@ def _sum_matrix_values(matrix: NDArray2D) -> int:
     return sum(sum(row) for row in matrix)
 
 
-def _merge_channels(b: NDArray2D,
-                    g: NDArray2D,
-                    r: NDArray2D) -> NDArray3D:
-    new = np.empty((len(b), len(b[0]), 3), dtype='int16')
+def _merge_channels(brown: NDArray2D,
+                    green: NDArray2D,
+                    red: NDArray2D) -> NDArray3D:
+    new = np.empty((len(brown), len(brown[0]), 3), dtype='int16')
 
     for i in range(len(new)):
         for j in range(len(new[0])):
-            values = (b[i, j], g[i, j], r[i, j])
-            new[i, j] = np.array(values, dtype='int16')
+            new[i, j, 0] = brown[i, j]
+            new[i, j, 1] = green[i, j]
+            new[i, j, 2] = red[i, j]
 
     return new
 

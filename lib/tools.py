@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Sequence
 import time
 
 
@@ -22,3 +22,28 @@ class PrintExecutionTime:
         print(f"Function: {self._func.__name__}\nTime: {average_time} secs\n")
 
         return res
+
+
+def total_elements(seq: Sequence[Sequence]) -> int:
+    res = 0
+    for row in seq:
+        res += len(row)
+
+    return res
+
+
+def is_ok_2d(seq: Sequence[Sequence]):
+    for row in seq:
+        for val in row:
+            if val < -1000 or val > 1000:
+                print(val, type(val))
+                return False
+
+    return True
+
+
+def is_ok(seq: Sequence):
+    for val in seq:
+        if val < -1000 or val > 1000:
+            print(val, type(val))
+            return False
