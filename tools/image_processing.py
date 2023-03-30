@@ -1,4 +1,6 @@
 import itertools
+import time
+
 import cv2 as cv
 import numpy as np
 from concurrent import futures
@@ -7,18 +9,6 @@ from tools import execution_time
 
 NDArray2D: TypeAlias = np.ndarray[np.ndarray[int]]
 NDArray3D: TypeAlias = np.ndarray[np.ndarray[np.ndarray[int]]]
-
-
-@execution_time.PrintExecutionTime
-def convolve_images_multiprocess(images: list[NDArray3D],
-                                 kernel: NDArray2D,
-                                 processes: int) -> list[NDArray3D]:
-    print(f"Processes: {processes}")
-    with futures.ProcessPoolExecutor(max_workers=processes) as executor:
-        results = executor.map(
-            convolve_img, images, itertools.repeat(kernel)
-        )
-    return list(results)
 
 
 @execution_time.PrintExecutionTime
@@ -39,6 +29,7 @@ def save_pictures(pictures: list[NDArray3D], folder: str):
         cv.imwrite(img_path, img)
 
 
+@execution_time.PrintExecutionTime
 def convolve_img(img: NDArray3D,
                  kernel: NDArray2D) -> NDArray3D:
     blue, green, red = _get_channels(img)
@@ -79,23 +70,77 @@ def _get_channels(img: NDArray3D) -> tuple[NDArray2D, NDArray2D, NDArray2D]:
 
 def _convolve_channel(channel: NDArray2D,
                       kernel: NDArray2D) -> NDArray2D:
-    res = _multiply_matrices(channel, kernel)
+    res = _multiply_by_kernel_multiprocess(channel, kernel)
+    # res = _multiply_by_kernel(channel, kernel)
     _process_matrix(res)
     return res
 
 
-def _multiply_matrices(a: NDArray2D, b: NDArray2D) -> NDArray2D:
-    x_size = len(b)
-    y_size = len(b[0])
-    x_len = len(a)
-    y_len = len(a[0])
+def _multiply_by_kernel_multiprocess(matrix: NDArray2D, kernel: NDArray2D) -> NDArray2D:
+    x_size = len(kernel)
+    y_size = len(kernel[0])
+    x_len = len(matrix)
+    y_len = len(matrix[0])
+    res_matrix_x_len = x_len - x_size + 1
+    res_matrix_y_len = y_len - y_size + 1
+
+    new = np.empty((res_matrix_x_len, res_matrix_y_len), dtype='int16')
+    packs_of_areas = _get_packs_of_areas(matrix, kernel)
+
+    with futures.ProcessPoolExecutor(max_workers=1) as executor:
+        packs_of_results = executor.map(
+            _multiply_pack_of_areas,
+            packs_of_areas, itertools.repeat(kernel),
+        )
+
+    for i, pack_of_results in enumerate(packs_of_results):
+        for j, result in enumerate(pack_of_results):
+            new[i, j] = result
+
+    return new
+
+
+def _get_packs_of_areas(matrix: NDArray2D,
+                        kernel: NDArray2D) -> list[list[NDArray2D]]:
+    x_size = len(kernel)
+    y_size = len(kernel[0])
+    x_len = len(matrix)
+    y_len = len(matrix[0])
+    res_matrix_x_len = x_len - x_size + 1
+    res_matrix_y_len = y_len - y_size + 1
+
+    packs_of_areas = []
+    for i in range(res_matrix_x_len):
+        pack_of_areas = []
+        for j in range(res_matrix_y_len):
+            pack_of_areas.append(np.array(matrix[i:i + x_size, j:j + y_size]))
+        packs_of_areas.append(pack_of_areas)
+
+    return packs_of_areas
+
+
+def _multiply_pack_of_areas(pack_of_areas: list[NDArray2D],
+                            kernel: NDArray2D) -> list[NDArray2D]:
+    pack_of_results = []
+    for area in pack_of_areas:
+        pack_of_results.append(_multiply_by_kernel(area, kernel))
+
+    return pack_of_results
+
+
+def _multiply_by_kernel(matrix: NDArray2D, kernel: NDArray2D) -> NDArray2D:
+    x_size = len(kernel)
+    y_size = len(kernel[0])
+    x_len = len(matrix)
+    y_len = len(matrix[0])
     res_matrix_x_len = x_len - x_size + 1
     res_matrix_y_len = y_len - y_size + 1
     new = np.empty((res_matrix_x_len, res_matrix_y_len), dtype='int16')
 
     for i in range(res_matrix_x_len):
         for j in range(res_matrix_y_len):
-            res = _multiply_area(a[i:i + x_size, j:j + y_size], b)
+            # areas_to_multiply.append(matrix[i:i + x_size, j:j + y_size])
+            res = _multiply_area(matrix[i:i + x_size, j:j + y_size], kernel)
             new[i, j] = res
 
     return new

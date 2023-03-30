@@ -4,7 +4,7 @@ import time
 
 class PrintExecutionTime:
     _func: Callable
-    REPEATS: int = 3
+    REPEATS: int = 1
 
     def __init__(self, func: Callable):
         self._func = func
