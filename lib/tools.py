@@ -24,9 +24,9 @@ class PrintExecutionTime:
         return res
 
 
-def total_elements(seq: Sequence[Sequence]) -> int:
+def total_elements(seq_2d: Sequence[Sequence]) -> int:
     res = 0
-    for row in seq:
+    for row in seq_2d:
         res += len(row)
 
     return res

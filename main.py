@@ -15,8 +15,7 @@ SAVE_FOLDER: Final = 'processed_images'
 def main():
     raw_img = cv.imread('raw_images/small.jpg')
     processed_image = image_processing.convolve_img(
-        img=raw_img, kernel=kernels.RELIEF, processes=6,
-    )
+        img=raw_img, kernel=kernels.RELIEF, processes=1)
 
     cv.imwrite('foo/bar.jpg', processed_image)
 
