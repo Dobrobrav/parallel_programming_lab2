@@ -4,13 +4,26 @@ import time
 import cv2 as cv
 import numpy as np
 from concurrent import futures
-from typing import TypeAlias, Final
+from typing import TypeAlias, Final, Iterator, Iterable
 from lib import tools
 
 NDArray2D: TypeAlias = np.ndarray[np.ndarray[int]]
 NDArray3D: TypeAlias = np.ndarray[np.ndarray[np.ndarray[int]]]
 
-SLISE_SIZE: Final = 1000
+CONVOLVE_SLICE_SIZE: Final = 10_000
+EROSION_SLICE_SIZE: Final = 10_000
+GS_SLICE_SIZE: Final = 100_000
+
+GS_PROCESSES: Final = 6
+ERODE_PROCESSES: Final = 6
+
+
+def threshold_img(img: NDArray2D,
+                  threshold: float) -> NDArray2D:
+    filter_func = lambda x: 0 if x < threshold else 1
+    processed_img = np.apply_along_axis(func1d=filter_func, axis=1, arr=img)
+
+    return processed_img
 
 
 # @tools.PrintExecutionTime
@@ -44,21 +57,67 @@ def convolve_img(img: NDArray3D,
     return convolved_img
 
 
+def erode_img(img: NDArray2D,
+              step: int) -> NDArray2D:
+    for _ in range(step):
+        img = erode_img_step_1(img)
+
+    return img
+
+
+def erode_img_step_1(img: NDArray2D) -> NDArray2D:
+    packs_of_areas = _get_packs_of_areas(
+        matrix=img, area_x=3, area_y=3,
+        slice_size=EROSION_SLICE_SIZE)
+
+    packs_of_results = _erode_packs_of_areas(packs=packs_of_areas)
+
+    processed_img = _get_matrix_from_packs(
+        packs=packs_of_results, x=..., y=...)
+
+    return processed_img
+
+
+def _erode_packs_of_areas(packs: list[list[NDArray2D]]) -> Iterator[list[int]]:
+    with futures.ProcessPoolExecutor(max_workers=ERODE_PROCESSES) as executor:
+        packs_of_results = executor.map(
+            _erode_pack_of_areas,
+            packs,
+        )
+
+    return packs_of_results
+
+
+def _erode_pack_of_areas(pack: list[NDArray2D]) -> list[int]:
+    results = [_erode_area(area) for area in pack]
+    return results
+
+
+def _erode_area(area: NDArray2D, kernel=None) -> int:
+    kernel = np.array([
+        [1, 1, 1],
+        [1, 1, 1],
+        [1, 1, 1],
+    ])
+
+    return 0 if area < kernel else 1
+
+
 @tools.PrintExecutionTime
 def _convolve_channels(channels: tuple[NDArray2D, NDArray2D, NDArray2D],
                        kernel: NDArray2D,
-                       processes: int | None) -> tuple[NDArray2D, NDArray2D, NDArray2D]:
-    with futures.ProcessPoolExecutor(max_workers=1) as executor:
+                       processes: int | None) -> Iterator[NDArray2D]:
+    with futures.ProcessPoolExecutor(max_workers=3) as executor:
         results = executor.map(
             _convolve_channel,
             channels, itertools.repeat(kernel), itertools.repeat(processes),
         )
 
-    print(results)
-    return tuple(results)  # type: ignore
+    return results
 
 
-def scale_img(img: NDArray3D, scale_by: int = 2):
+def scale_img(img: NDArray3D,
+              scale_by: int = 2) -> NDArray3D:
     b, g, r = _get_channels(img)
     b_scaled = _scale_channel(b, scale_by)
     g_scaled = _scale_channel(g, scale_by)
@@ -73,6 +132,43 @@ def read_images(paths: list[str]) -> list[NDArray3D]:
     return images
 
 
+@tools.PrintExecutionTime
+def grayscale_img(img: NDArray3D) -> NDArray2D:
+    raw_packs = _get_packs_of_pixels(img, slice_size=GS_SLICE_SIZE)
+    gs_packs = _grayscale_packs(raw_packs)
+
+    x, y, _ = img.shape
+    new_matrix = _get_matrix_from_packs(
+        packs=gs_packs, x=x, y=y)
+
+    return new_matrix
+
+
+@tools.PrintExecutionTime
+def _grayscale_packs(packs: list[list[np.ndarray]]) -> Iterator[list[int]]:
+    with futures.ProcessPoolExecutor(max_workers=GS_PROCESSES) as executor:
+        gs_packs = executor.map(
+            _grayscale_pack,
+            packs,
+        )
+
+    return gs_packs  # Плохо параллелится предположительно из-за того, что каждый пак надо скопировать
+
+
+def _grayscale_pack(pack: list[np.ndarray]) -> list[int]:
+    start = time.perf_counter()
+    print('start')
+
+    gs_pack = [_grayscale_pixel(pixel) for pixel in pack]
+
+    # print(time.perf_counter() - start)
+    return gs_pack
+
+
+def _grayscale_pixel(pixel: np.ndarray) -> int:
+    return sum(pixel) / len(pixel)
+
+
 # @tools.PrintExecutionTime
 def _get_channels(img: NDArray3D) -> tuple[NDArray2D, NDArray2D, NDArray2D]:
     blue_channel = img[:, :, 0]
@@ -85,7 +181,6 @@ def _get_channels(img: NDArray3D) -> tuple[NDArray2D, NDArray2D, NDArray2D]:
 def _convolve_channel(channel: NDArray2D,
                       kernel: NDArray2D,
                       processes: int | None) -> NDArray2D:
-    # print('start')
     kernel_x = len(kernel)
     kernel_y = len(kernel[0])
     matrix_x = len(channel)
@@ -95,14 +190,13 @@ def _convolve_channel(channel: NDArray2D,
     new_matrix_y = matrix_y - kernel_y + 1
 
     packs_of_areas = _get_packs_of_areas(
-        matrix=channel, area_x=kernel_x, area_y=kernel_y, slice_size=SLISE_SIZE)
-    # print(tools.total_elements(packs_of_areas), 'abc')
+        matrix=channel, area_x=kernel_x, area_y=kernel_y,
+        slice_size=CONVOLVE_SLICE_SIZE)
 
     packs_of_results = _multiply_packs_of_areas_by_kernel(
         packs=packs_of_areas, kernel=kernel, processes=processes)
 
-    # print(tools.total_elements(packs_of_results), 'bcd')
-    processed_matrix = _get_matrix_from_packs_of_results(
+    processed_matrix = _get_matrix_from_packs(
         packs=packs_of_results, x=new_matrix_x, y=new_matrix_y)
 
     return processed_matrix
@@ -113,21 +207,40 @@ def _get_packs_of_areas(matrix: NDArray2D,
                         area_x: int,
                         area_y: int,
                         slice_size: int) -> list[list[NDArray2D]]:
-    areas = _get_areas_from_matrix(matrix, area_x, area_y)
-    # print(len(areas), 'areas')
+    areas: list[NDArray2D] = _get_areas(matrix, area_x, area_y)
+    packs_of_areas: list[list[NDArray2D]] = _get_packs(areas, slice_size)
 
+    return packs_of_areas
+
+
+@tools.PrintExecutionTime
+def _get_packs_of_pixels(img: NDArray3D,
+                         slice_size: int) -> list[list[np.ndarray]]:
+    pixels: NDArray2D = _reduce_dimension(img)
+    packs_of_pixels: list[list[NDArray2D]] = _get_packs(pixels, slice_size)
+
+    return packs_of_pixels
+
+
+def _reduce_dimension(ndarray_3d: np.ndarray) -> np.ndarray:
+    x, y, z = ndarray_3d.shape
+    return ndarray_3d.reshape((x * y, z))
+
+
+def _get_packs(units: Iterable, slice_size: int) -> list[list]:
     packs = [[]]
-    for area in areas:
+
+    for unit in units:
         if len(packs[-1]) == slice_size:  # if pack is full, start new pack
             packs.append([])
-        packs[-1].append(area)  # add pixel to the latest started pack
+        packs[-1].append(unit)  # add pixel to the latest started pack
 
     return packs
 
 
-def _get_areas_from_matrix(matrix: NDArray2D,
-                           area_x: int,
-                           area_y: int) -> list[NDArray2D]:
+def _get_areas(matrix: NDArray2D,
+               area_x: int,
+               area_y: int) -> list[NDArray2D]:
     # print(tools.total_elements(matrix))
 
     areas = []
@@ -141,7 +254,7 @@ def _get_areas_from_matrix(matrix: NDArray2D,
 # @tools.PrintExecutionTime
 def _multiply_packs_of_areas_by_kernel(packs: list[list[NDArray2D]],
                                        kernel: NDArray2D,
-                                       processes: int | None) -> list[list[int]]:
+                                       processes: int | None) -> Iterator[list[int]]:
     # print(tools.total_elements(packs))
 
     with futures.ProcessPoolExecutor(max_workers=processes) as executor:
@@ -150,18 +263,15 @@ def _multiply_packs_of_areas_by_kernel(packs: list[list[NDArray2D]],
             packs, itertools.repeat(kernel),
         )
 
-    lst_packs_of_results = list(packs_of_results)
-    # print(len(lst_packs_of_results))
-    return lst_packs_of_results
+    return packs_of_results
 
 
-# @tools.PrintExecutionTime
-def _get_matrix_from_packs_of_results(packs: list[list[int]],
-                                      x: int,
-                                      y: int) -> NDArray2D:
+@tools.PrintExecutionTime
+def _get_matrix_from_packs(packs: Iterator[list[int]],
+                           x: int,
+                           y: int) -> NDArray2D:
     ndarray = np.empty(shape=(x * y), dtype='int32')
-    # print(tools.total_elements(packs))
-    # print(len(ndarray))
+
     _fill_ndarray_with_packed_results(ndarray, packs=packs)
     matrix = ndarray.reshape((x, y))
 
@@ -169,10 +279,8 @@ def _get_matrix_from_packs_of_results(packs: list[list[int]],
 
 
 def _fill_ndarray_with_packed_results(ndarray: np.ndarray[int],
-                                      packs: list[list[int]]) -> None:
+                                      packs: Iterator[list[int]]) -> None:
     results_iter = itertools.chain(*packs)
-    # print(len(list(results_iter)))
-    # print(len(ndarray))
 
     for i, _ in enumerate(ndarray):
         ndarray[i] = next(results_iter)
@@ -180,12 +288,10 @@ def _fill_ndarray_with_packed_results(ndarray: np.ndarray[int],
 
 def _multiply_pack_of_areas_by_kernel(pack: list[NDArray2D],
                                       kernel: NDArray2D) -> list[int]:
-    start = time.perf_counter()
     pack_of_results = [
         _multiply_area_by_kernel(area=area, kernel=kernel)
         for area in pack
     ]
-    # print(f"multiply_pack time: {time.perf_counter() - start}", '\n')
 
     return pack_of_results
 
