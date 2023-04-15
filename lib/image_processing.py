@@ -4,7 +4,7 @@ import time
 import cv2 as cv
 import numpy as np
 from concurrent import futures
-from typing import TypeAlias, Final, Iterator, Iterable
+from typing import TypeAlias, Final, Iterator, Iterable, Callable
 from lib import tools
 
 NDArray2D: TypeAlias = np.ndarray[np.ndarray[int]]
@@ -58,48 +58,68 @@ def convolve_img(img: NDArray3D,
 
 
 def erode_img(img: NDArray2D,
+              kernel: NDArray2D,
               step: int) -> NDArray2D:
     for _ in range(step):
-        img = erode_img_step_1(img)
+        img = _erode_img_step_1(img, kernel)
 
     return img
 
 
-def erode_img_step_1(img: NDArray2D) -> NDArray2D:
+def _erode_img_step_1(img: NDArray2D,
+                      kernel: NDArray2D) -> NDArray2D:
+    return _process_2d_img(
+        processor=_erode_pack_of_areas, img=img,
+        kernel=kernel, processes=ERODE_PROCESSES
+    )
+
+
+def _process_2d_img(processor: Callable,
+                    img: NDArray2D,
+                    kernel: NDArray2D,
+                    processes: int | None) -> NDArray2D:
+    kernel_x = len(kernel)
+    kernel_y = len(kernel[0])
+    matrix_x = len(img)
+    matrix_y = len(img[0])
+
+    new_matrix_x = matrix_x - kernel_x + 1
+    new_matrix_y = matrix_y - kernel_y + 1
+
     packs_of_areas = _get_packs_of_areas(
-        matrix=img, area_x=3, area_y=3,
+        matrix=img, area_x=kernel_x, area_y=kernel_y,
         slice_size=EROSION_SLICE_SIZE)
 
-    packs_of_results = _erode_packs_of_areas(packs=packs_of_areas)
+    packs_of_results = _process_packs_of_areas(
+        processor=processor, packs=packs_of_areas,
+        kernel=kernel, processes=processes)
 
     processed_img = _get_matrix_from_packs(
-        packs=packs_of_results, x=..., y=...)
+        packs=packs_of_results, x=new_matrix_x, y=new_matrix_y)
 
     return processed_img
 
 
-def _erode_packs_of_areas(packs: list[list[NDArray2D]]) -> Iterator[list[int]]:
-    with futures.ProcessPoolExecutor(max_workers=ERODE_PROCESSES) as executor:
+def _process_packs_of_areas(processor: Callable,
+                            packs: list[list[NDArray2D]],
+                            kernel: NDArray2D,
+                            processes: int | None) -> Iterator[list[int]]:
+    with futures.ProcessPoolExecutor(max_workers=processes) as executor:
         packs_of_results = executor.map(
-            _erode_pack_of_areas,
-            packs,
+            processor,
+            packs, itertools.repeat(kernel)
         )
 
     return packs_of_results
 
 
-def _erode_pack_of_areas(pack: list[NDArray2D]) -> list[int]:
-    results = [_erode_area(area) for area in pack]
+def _erode_pack_of_areas(pack: list[NDArray2D],
+                         kernel: NDArray2D) -> list[int]:
+    results = [_erode_area(area, kernel) for area in pack]
     return results
 
 
-def _erode_area(area: NDArray2D, kernel=None) -> int:
-    kernel = np.array([
-        [1, 1, 1],
-        [1, 1, 1],
-        [1, 1, 1],
-    ])
-
+def _erode_area(area: NDArray2D, kernel: NDArray2D) -> int:
     return 0 if area < kernel else 1
 
 
@@ -156,9 +176,6 @@ def _grayscale_packs(packs: list[list[np.ndarray]]) -> Iterator[list[int]]:
 
 
 def _grayscale_pack(pack: list[np.ndarray]) -> list[int]:
-    start = time.perf_counter()
-    print('start')
-
     gs_pack = [_grayscale_pixel(pixel) for pixel in pack]
 
     # print(time.perf_counter() - start)
@@ -181,25 +198,12 @@ def _get_channels(img: NDArray3D) -> tuple[NDArray2D, NDArray2D, NDArray2D]:
 def _convolve_channel(channel: NDArray2D,
                       kernel: NDArray2D,
                       processes: int | None) -> NDArray2D:
-    kernel_x = len(kernel)
-    kernel_y = len(kernel[0])
-    matrix_x = len(channel)
-    matrix_y = len(channel[0])
+    res = _process_2d_img(
+        processor=_multiply_pack_of_areas_by_kernel, img=channel,
+        kernel=kernel, processes=processes
+    )
 
-    new_matrix_x = matrix_x - kernel_x + 1
-    new_matrix_y = matrix_y - kernel_y + 1
-
-    packs_of_areas = _get_packs_of_areas(
-        matrix=channel, area_x=kernel_x, area_y=kernel_y,
-        slice_size=CONVOLVE_SLICE_SIZE)
-
-    packs_of_results = _multiply_packs_of_areas_by_kernel(
-        packs=packs_of_areas, kernel=kernel, processes=processes)
-
-    processed_matrix = _get_matrix_from_packs(
-        packs=packs_of_results, x=new_matrix_x, y=new_matrix_y)
-
-    return processed_matrix
+    return res
 
 
 # @tools.PrintExecutionTime
